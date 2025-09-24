@@ -12,6 +12,115 @@ window.geometry("400x300")
 
 buttons = []
 
+# Добавляем контейнер для списка файлов с чекбоксами
+files_frame = tb.Frame(window)
+files_frame.pack(fill="both", expand=False, padx=10, pady=5)
+
+# Словарь: ключ - путь к файлу, значение - tk.BooleanVar для чекбокса
+file_vars = {}
+
+def merge_selected_logs():
+    # Собираем пути выбранных файлов (чекбокс отмечен)
+    selected_files = [path for path, var in file_vars.items() if var.get()]
+    if len(selected_files) < 2:
+        tb.Messagebox.show_warning(title="Внимание", message="Выберите минимум два файла для объединения.")
+        return
+
+    all_lines = []       # Список кортежей (время, строка)
+    all_round_ids = set()  # Множество уникальных round ID
+
+    # Регулярное выражение для извлечения временной метки из начала строки
+    datetime_pattern = re.compile(r'^$$(?P<datetime>[^]]+)$$')
+
+    for file_path in selected_files:
+        # Извлекаем round ID из файла
+        round_id = extract_round_id_from_file(file_path)
+        if round_id:
+            all_round_ids.add(round_id)
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    # Пропускаем строку с round ID в начале файла
+                    if line.startswith("Starting up round ID"):
+                        continue
+
+                    m = datetime_pattern.match(line)
+                    if m:
+                        dt_str = m.group("datetime")
+                        # Преобразуем строку времени в объект time.struct_time для сортировки
+                        try:
+                            dt_obj = time.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            # Если парсинг не удался, ставим минимальное время (чтобы такие строки были в начале)
+                            dt_obj = time.gmtime(0)
+                        all_lines.append((dt_obj, line))
+                    else:
+                        # Если нет временной метки, ставим минимальное время
+                        all_lines.append((time.gmtime(0), line))
+        except Exception as e:
+            tb.Messagebox.show_error(title="Ошибка", message=f"Не удалось прочитать файл {file_path}:\n{e}")
+            return
+
+    # Сортируем все строки по времени (dt_obj)
+    all_lines.sort(key=lambda x: x[0])
+
+    # Извлекаем только текст строк
+    merged_lines = [line for _, line in all_lines]
+
+    # Создаем временный "файл" в памяти с объединённым логом
+    # Для отображения используем существующую функцию new_window_with_log,
+    # но передадим ей данные напрямую (cached_data)
+
+    # Формируем заголовок с перечислением уникальных round ID через запятую
+    round_ids_str = ", ".join(sorted(all_round_ids))
+
+    # Создаем новое окно для объединённого лога
+    new_window = tb.Toplevel(window)
+    new_window.title(f"Объединённый лог — Round ID: {round_ids_str}")
+    new_window.geometry("700x600")
+
+    filter_frame = tb.Frame(new_window)
+    filter_frame.pack(fill="x", padx=10, pady=5)
+
+    filter_ckey_label = tb.Label(filter_frame, text="Фильтр по ckey: нет", bootstyle="info")
+    filter_ckey_label.pack(side="left", padx=5)
+
+    search_label = tb.Label(filter_frame, text="Поиск ckey:")
+    search_label.pack(side="left", padx=(20, 5))
+
+    search_var = tk.StringVar()
+    search_entry = tb.Entry(filter_frame, textvariable=search_var, width=15)
+    search_entry.pack(side="left", padx=5)
+
+    hide_no_key_var = tk.BooleanVar(value=False)
+    hide_no_key_check = tb.Checkbutton(filter_frame, text="Скрыть логи мобов", variable=hide_no_key_var)
+    hide_no_key_check.pack(side="left", padx=10)
+
+    filter_logtype_var = tk.StringVar(value="Все")
+    logtypes_list = ["Все"] + sorted({lt for lt in LOGTYPE_COLORS.keys() if lt not in ("datetime", "ckey", "charname", "message", "location", "other")})
+    filter_logtype_combo = ttk.Combobox(filter_frame, textvariable=filter_logtype_var, values=logtypes_list, state="readonly", width=10)
+    filter_logtype_combo.pack(side="right", padx=5)
+    filter_logtype_combo_label = tb.Label(filter_frame, text="Фильтр по типу лога:")
+    filter_logtype_combo_label.pack(side="right")
+
+    reset_filter_btn = tb.Button(new_window, text="Сбросить фильтр", bootstyle="warning-outline")
+    reset_filter_btn.pack(pady=5)
+    reset_filter_btn.pack_forget()
+
+    close_button = tb.Button(new_window, text="Закрыть окно", command=new_window.destroy)
+    close_button.pack(pady=5)
+
+    canvas_frame = tb.Frame(new_window)
+    canvas_frame.pack(fill="both", expand=True)
+
+    v_scroll = tb.Scrollbar(canvas_frame, orient="vertical")
+    v_scroll.pack(side="right", fill="y")
+
+# Кнопка для объединения выбранных файлов
+merge_button = tb.Button(window, text="Объединить выбранные файлы", bootstyle="success", command=merge_selected_logs)
+merge_button.pack(pady=10)
+
 PADDING_X = 6
 PADDING_Y = 3
 SPACING_X = 8
@@ -833,22 +942,36 @@ def show_log(log_file_path):
     else:
         new_window_with_log(log_file_path)
 
-def add_new_button(log_file_path):
-    button_name = os.path.basename(log_file_path)
-    # Проверяем, чтобы не добавлять дубликаты кнопок
-    for btn in buttons:
-        if btn.cget("text") == button_name:
-            return
-    button = tb.Button(window, text=button_name, command=lambda: show_log(log_file_path))
-    buttons.append(button)
-    button.pack(pady=5, fill="x")
+def add_file_checkbox(log_file_path):
+    filename = os.path.basename(log_file_path)
+    if log_file_path in file_vars:
+        return  # файл уже добавлен
 
-def add_new_log():
-    log_file = filedialog.askopenfile(title="Выберите log файл", filetypes=[("Логи", "*.log")])
-    if log_file:
-        add_new_button(log_file.name)
+    var = tk.BooleanVar(value=True)
 
-start_button = tb.Button(window, text="Выберите лог файл", command=add_new_log)
+    # Контейнер для строки с чекбоксом и кнопкой
+    row_frame = tb.Frame(files_frame)
+    row_frame.pack(anchor="w", fill="x", pady=2)
+
+    cb = tb.Checkbutton(row_frame, text=filename, variable=var)
+    cb.pack(side="left", fill="x", expand=True)
+
+    def on_open():
+        show_log(log_file_path)
+
+    open_btn = tb.Button(row_frame, text="Открыть", width=8, bootstyle="info", command=on_open)
+    open_btn.pack(side="right", padx=5)
+
+    file_vars[log_file_path] = var
+
+
+def add_new_logs():
+    # Выбираем несколько файлов
+    log_files = filedialog.askopenfilenames(title="Выберите log файлы", filetypes=[("Логи", "*.log")])
+    for log_file_path in log_files:
+        add_file_checkbox(log_file_path)
+
+start_button = tb.Button(window, text="Выберите лог файл", command=add_new_logs)
 start_button.pack(pady=10)
 
 window.mainloop()
