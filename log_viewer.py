@@ -1,7 +1,6 @@
 import ttkbootstrap as tb
 from tkinter import filedialog
 from tkinter import ttk  # Для Combobox и Progressbar
-from PIL import ImageTk, Image
 import tkinter as tk
 import re
 import os
@@ -10,9 +9,6 @@ import time
 window = tb.Window(themename="darkly")
 window.title("Парсер логов by iamasay")
 window.geometry("400x300")
-icon = tk.PhotoImage(file='logo.png')
-img = Image.open('logo.png')
-window.iconphoto(False, icon)
 
 buttons = []
 
