@@ -30,7 +30,7 @@ def merge_selected_logs():
     all_round_ids = set()  # Множество уникальных round ID
 
     # Регулярное выражение для извлечения временной метки из начала строки
-    datetime_pattern = re.compile(r'^$$(?P<datetime>[^]]+)$$')
+    datetime_pattern = re.compile(r'^\[(?P<datetime>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]')
 
     for file_path in selected_files:
         # Извлекаем round ID из файла
@@ -62,20 +62,23 @@ def merge_selected_logs():
             tb.Messagebox.show_error(title="Ошибка", message=f"Не удалось прочитать файл {file_path}:\n{e}")
             return
 
+    if not all_lines:
+        tb.Messagebox.show_warning(title="Внимание", message="В выбранных файлах нет данных для объединения.")
+        return
+
     # Сортируем все строки по времени (dt_obj)
     all_lines.sort(key=lambda x: x[0])
 
-    # Извлекаем только текст строк
-    merged_lines = [line for _, line in all_lines]
+    # Преобразуем строки в формат для отображения - парсим каждую строку вызовом parse_log_line
+    merged_lines_parsed = [parse_log_line(line) for _, line in all_lines]
 
-    # Создаем временный "файл" в памяти с объединённым логом
-    # Для отображения используем существующую функцию new_window_with_log,
-    # но передадим ей данные напрямую (cached_data)
-
-    # Формируем заголовок с перечислением уникальных round ID через запятую
     round_ids_str = ", ".join(sorted(all_round_ids))
 
-    # Создаем новое окно для объединённого лога
+    # Создаём и отображаем окно с объединённым логом
+    show_merged_log_window(merged_lines_parsed, round_ids_str)
+
+
+def show_merged_log_window(parsed_lines, round_ids_str):
     new_window = tb.Toplevel(window)
     new_window.title(f"Объединённый лог — Round ID: {round_ids_str}")
     new_window.geometry("700x600")
@@ -101,7 +104,7 @@ def merge_selected_logs():
     logtypes_list = ["Все"] + sorted({lt for lt in LOGTYPE_COLORS.keys() if lt not in ("datetime", "ckey", "charname", "message", "location", "other")})
     filter_logtype_combo = ttk.Combobox(filter_frame, textvariable=filter_logtype_var, values=logtypes_list, state="readonly", width=10)
     filter_logtype_combo.pack(side="right", padx=5)
-    filter_logtype_combo_label = tb.Label(filter_frame, text="Фильтр по типу лога:")
+    filter_logtype_combo_label = tb.Label(filter_frame, text="Фильтр по типу лога")
     filter_logtype_combo_label.pack(side="right")
 
     reset_filter_btn = tb.Button(new_window, text="Сбросить фильтр", bootstyle="warning-outline")
@@ -116,6 +119,96 @@ def merge_selected_logs():
 
     v_scroll = tb.Scrollbar(canvas_frame, orient="vertical")
     v_scroll.pack(side="right", fill="y")
+
+    log_canvas = LogCanvas(canvas_frame, bg="#222222", highlightthickness=0)
+    log_canvas.pack(side="left", fill="both", expand=True)
+
+    v_scroll.config(command=log_canvas.yview)
+    log_canvas.configure(yscrollcommand=v_scroll.set)
+
+    filter_ckey = None
+    all_lines_parsed = parsed_lines
+
+    def display_lines(filter_ckey_param=None, filter_logtype_param=None, hide_no_key=False):
+        nonlocal filter_ckey
+        filter_ckey = filter_ckey_param
+
+        filter_ckey_lower = filter_ckey.lower() if filter_ckey else None
+        filter_logtype_val = filter_logtype_param if filter_logtype_param and filter_logtype_param != "Все" else None
+
+        filtered = []
+        for parts in all_lines_parsed:
+            ckeys = [text for (text, color) in parts if color == LOGTYPE_COLORS["ckey"]]
+            logtype_str = parts[1][0].rstrip(":") if len(parts) > 1 else None
+
+            if hide_no_key and any(ck == "*no key*" for ck in ckeys):
+                continue
+
+            ckey_match = True
+            logtype_match = True
+
+            if filter_ckey_lower:
+                ckey_match = any(filter_ckey_lower in ck.lower() for ck in ckeys)
+            if filter_logtype_val:
+                logtype_match = (logtype_str == filter_logtype_val)
+
+            if ckey_match and logtype_match:
+                filtered.append(parts)
+
+        log_canvas.set_filtered_lines(filtered)
+
+        if filter_ckey:
+            filter_ckey_label.config(text=f"Фильтр по ckey: {filter_ckey}")
+        else:
+            filter_ckey_label.config(text="Фильтр по ckey: нет")
+
+        if filter_ckey or filter_logtype_val or hide_no_key:
+            reset_filter_btn.pack(pady=5)
+        else:
+            reset_filter_btn.pack_forget()
+
+    def on_ckey_click(ckey):
+        display_lines(filter_ckey_param=ckey,
+                      filter_logtype_param=filter_logtype_var.get(),
+                      hide_no_key=hide_no_key_var.get())
+
+    log_canvas.ckey_click_callback = on_ckey_click
+
+    def on_logtype_change(event):
+        display_lines(filter_ckey_param=filter_ckey,
+                      filter_logtype_param=filter_logtype_var.get(),
+                      hide_no_key=hide_no_key_var.get())
+
+    filter_logtype_combo.bind("<<ComboboxSelected>>", on_logtype_change)
+
+    def on_hide_no_key_toggle(*args):
+        display_lines(filter_ckey_param=filter_ckey,
+                      filter_logtype_param=filter_logtype_var.get(),
+                      hide_no_key=hide_no_key_var.get())
+
+    hide_no_key_var.trace_add("write", on_hide_no_key_toggle)
+
+    def on_search_apply(event=None):
+        ckey_text = search_var.get().strip()
+        if ckey_text == "":
+            ckey_text = None
+        display_lines(filter_ckey_param=ckey_text,
+                      filter_logtype_param=filter_logtype_var.get(),
+                      hide_no_key=hide_no_key_var.get())
+
+    search_entry.bind("<Return>", on_search_apply)
+    search_button = tb.Button(filter_frame, text="Применить", command=on_search_apply)
+    search_button.pack(side="left", padx=5)
+
+    def reset_filters():
+        filter_logtype_var.set("Все")
+        hide_no_key_var.set(False)
+        search_var.set("")
+        display_lines(None, None, False)
+
+    reset_filter_btn.configure(command=reset_filters)
+
+    display_lines()
 
 # Кнопка для объединения выбранных файлов
 merge_button = tb.Button(window, text="Объединить выбранные файлы", bootstyle="success", command=merge_selected_logs)
@@ -607,9 +700,13 @@ def parse_log_line(line):
 
     parts = [(f"[{dt}]", LOGTYPE_COLORS["datetime"]), (f"{lt}:", LOGTYPE_COLORS.get(lt, LOGTYPE_COLORS["other"]))]
 
-    if lt in ("OOC", "SAY", "EMOTE"):
+    # Вариант 6: Общий шаблон для OOC, SAY, EMOTE, LOOC с ckey (включая "*no key*")
+    if lt in ("OOC", "SAY", "EMOTE", "LOOC"):
+        # Разрешаем ckey = "*no key*" или любое непустое, не содержащее '/'
         m2 = re.match(
-            r'^(?P<ckey>[^/]+)/(?:\((?P<charname>[^)]+)\))?\s+"(?P<message>[^"]*)"\s*(?P<location>\(.*\))?', rest)
+            r'^(?P<ckey>\*no key\*|[^/]+)/(?:\((?P<charname>[^)]+)\))?\s+"(?P<message>[^"]*)"\s*(?P<location>\(.*\))?',
+            rest
+        )
         if m2:
             ckey = m2.group("ckey")
             charname = m2.group("charname")
@@ -624,13 +721,7 @@ def parse_log_line(line):
                 parts.append((" " + location, LOGTYPE_COLORS["location"]))
         else:
             parts.append((rest, LOGTYPE_COLORS["message"]))
-
-    elif lt in ("GAME", "ACCESS", "VOTE", "ADMIN"):
-        parts.append((rest, LOGTYPE_COLORS["message"]))
-    else:
-        parts.append((rest, LOGTYPE_COLORS["message"]))
-
-    return parts
+        return parts
 
     m = re.match(r'^\[(?P<datetime>[^\]]+)\]\s+(?P<logtype>[A-Z]+):\s+(?P<rest>.*)', line)
     if not m:
@@ -641,6 +732,25 @@ def parse_log_line(line):
     rest = m.group("rest")
 
     parts = [(f"[{dt}]", LOGTYPE_COLORS["datetime"]), (f"{lt}:", LOGTYPE_COLORS.get(lt, LOGTYPE_COLORS["other"]))]
+
+    if lt == "EMOTE":
+        m_emote_no_quote = re.match(
+            r'^(?P<ckey>\*no key\*|[^/]+)/\((?P<charname>[^)]+)\)\s+(?P<message>.+?)(?:\s+(\(.*\)))?$',
+            rest,
+        )
+        if m_emote_no_quote:
+            ckey = m_emote_no_quote.group("ckey")
+            charname = m_emote_no_quote.group("charname")
+            message = m_emote_no_quote.group("message")
+            location = m_emote_no_quote.group(4)  # 4-я группа — optional location
+
+            parts.append((ckey, LOGTYPE_COLORS["ckey"]))
+            parts.append((f"/({charname})", LOGTYPE_COLORS["charname"]))
+            parts.append((" " + message.strip(), LOGTYPE_COLORS["message"]))
+            if location:
+                parts.append((" " + location, LOGTYPE_COLORS["location"]))
+            return parts
+
 
     if lt in ("OOC", "SAY", "EMOTE"):
         m2 = re.match(r'^(?P<ckey>[^/\s]+)/(?:\((?P<charname>[^)]+)\))?\s+"(?P<message>[^"]*)"\s*(?P<location>\(.*\))?', rest)
@@ -748,15 +858,18 @@ def remove_from_cache(log_file_path):
     if log_file_path in loaded_logs:
         del loaded_logs[log_file_path]
 
-def new_window_with_log(log_file_path, cached_data=None):
+def new_window_with_log(log_file_path=None, cached_data=None, window_title=None):
     new_window = tb.Toplevel(window)
-    round_id = extract_round_id_from_file(log_file_path)
-    if round_id:
-        new_window.title(f"{os.path.basename(log_file_path)} — Round ID: {round_id}")
-        new_window.geometry("700x600")
+    if window_title:
+        new_window.title(window_title)
+    elif log_file_path:
+        round_id = extract_round_id_from_file(log_file_path)
+        if round_id:
+            new_window.title(f"{os.path.basename(log_file_path)} — Round ID: {round_id}")
+        else:
+            new_window.title(os.path.basename(log_file_path))
     else:
-        new_window.title(os.path.basename(log_file_path))
-        new_window.geometry("700x600")
+        new_window.title("Лог")
 
     filter_frame = tb.Frame(new_window)
     filter_frame.pack(fill="x", padx=10, pady=5)
