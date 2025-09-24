@@ -89,11 +89,11 @@ def show_merged_log_window(parsed_lines, round_ids_str):
     filter_ckey_label = tb.Label(filter_frame, text="Фильтр по ckey: нет", bootstyle="info")
     filter_ckey_label.pack(side="left", padx=5)
 
-    search_label = tb.Label(filter_frame, text="Поиск ckey:")
+    search_label = tb.Label(filter_frame, text="Поиск ckey (через запятую, до 5):")
     search_label.pack(side="left", padx=(20, 5))
 
     search_var = tk.StringVar()
-    search_entry = tb.Entry(filter_frame, textvariable=search_var, width=15)
+    search_entry = tb.Entry(filter_frame, textvariable=search_var, width=30)  # расширяем поле
     search_entry.pack(side="left", padx=5)
 
     hide_no_key_var = tk.BooleanVar(value=False)
@@ -133,7 +133,14 @@ def show_merged_log_window(parsed_lines, round_ids_str):
         nonlocal filter_ckey
         filter_ckey = filter_ckey_param
 
-        filter_ckey_lower = filter_ckey.lower() if filter_ckey else None
+        # Разбираем строку с ckey на список, убираем пробелы, приводим к нижнему регистру
+        if filter_ckey:
+            ckey_list = [ck.strip().lower() for ck in filter_ckey.split(",") if ck.strip()]
+            if len(ckey_list) > 5:
+                ckey_list = ckey_list[:5]
+        else:
+            ckey_list = []
+
         filter_logtype_val = filter_logtype_param if filter_logtype_param and filter_logtype_param != "Все" else None
 
         filtered = []
@@ -147,8 +154,11 @@ def show_merged_log_window(parsed_lines, round_ids_str):
             ckey_match = True
             logtype_match = True
 
-            if filter_ckey_lower:
-                ckey_match = any(filter_ckey_lower in ck.lower() for ck in ckeys)
+            if ckey_list:
+                ckey_match = any(
+                    any(search_ckey in ck.lower() for ck in ckeys)
+                    for search_ckey in ckey_list
+                )
             if filter_logtype_val:
                 logtype_match = (logtype_str == filter_logtype_val)
 
@@ -193,8 +203,8 @@ def show_merged_log_window(parsed_lines, round_ids_str):
         if ckey_text == "":
             ckey_text = None
         display_lines(filter_ckey_param=ckey_text,
-                      filter_logtype_param=filter_logtype_var.get(),
-                      hide_no_key=hide_no_key_var.get())
+                    filter_logtype_param=filter_logtype_var.get(),
+                    hide_no_key=hide_no_key_var.get())
 
     search_entry.bind("<Return>", on_search_apply)
     search_button = tb.Button(filter_frame, text="Применить", command=on_search_apply)
@@ -700,6 +710,24 @@ def parse_log_line(line):
 
     parts = [(f"[{dt}]", LOGTYPE_COLORS["datetime"]), (f"{lt}:", LOGTYPE_COLORS.get(lt, LOGTYPE_COLORS["other"]))]
 
+    if lt == "EMOTE":
+        m_emote_no_quote = re.match(
+            r'^(?P<ckey>\*no key\*|[^/]+)/\((?P<charname>[^)]+)\)\s+(?P<message>.+?)(?:\s+(\(.*\)))?$',
+            rest,
+        )
+        if m_emote_no_quote:
+            ckey = m_emote_no_quote.group("ckey")
+            charname = m_emote_no_quote.group("charname")
+            message = m_emote_no_quote.group("message")
+            location = m_emote_no_quote.group(4)
+
+            parts.append((ckey, LOGTYPE_COLORS["ckey"]))
+            parts.append((f"/({charname})", LOGTYPE_COLORS["charname"]))
+            parts.append((" " + message.strip(), LOGTYPE_COLORS["message"]))
+            if location:
+                parts.append((" " + location, LOGTYPE_COLORS["location"]))
+            return parts
+
     # Вариант 6: Общий шаблон для OOC, SAY, EMOTE, LOOC с ckey (включая "*no key*")
     if lt in ("OOC", "SAY", "EMOTE", "LOOC"):
         # Разрешаем ckey = "*no key*" или любое непустое, не содержащее '/'
@@ -877,12 +905,11 @@ def new_window_with_log(log_file_path=None, cached_data=None, window_title=None)
     filter_ckey_label = tb.Label(filter_frame, text="Фильтр по ckey: нет", bootstyle="info")
     filter_ckey_label.pack(side="left", padx=5)
 
-    # Добавляем поле ввода для поиска ckey
-    search_label = tb.Label(filter_frame, text="Поиск ckey:")
+    search_label = tb.Label(filter_frame, text="Поиск ckey (через запятую, до 5):")
     search_label.pack(side="left", padx=(20, 5))
 
     search_var = tk.StringVar()
-    search_entry = tb.Entry(filter_frame, textvariable=search_var, width=15)
+    search_entry = tb.Entry(filter_frame, textvariable=search_var, width=30)  # увеличиваем ширину
     search_entry.pack(side="left", padx=5)
 
     # Чекбокс "Скрыть логи с ckey = *no key*"
@@ -927,10 +954,18 @@ def new_window_with_log(log_file_path=None, cached_data=None, window_title=None)
         nonlocal filter_ckey
         filter_ckey = filter_ckey_param
 
-        filter_ckey_lower = filter_ckey.lower() if filter_ckey else None
+        # Разбираем строку с ckey на список (максимум 5), убираем пробелы и пониженный регистр
+        if filter_ckey:
+            ckey_list = [ck.strip().lower() for ck in filter_ckey.split(",") if ck.strip()]
+            if len(ckey_list) > 5:
+                ckey_list = ckey_list[:5]
+        else:
+            ckey_list = []
+
         filter_logtype_val = filter_logtype_param if filter_logtype_param and filter_logtype_param != "Все" else None
 
         filtered = []
+
         for parts in all_lines_parsed:
             ckeys = [text for (text, color) in parts if color == LOGTYPE_COLORS["ckey"]]
             logtype_str = parts[1][0].rstrip(":") if len(parts) > 1 else None
@@ -941,9 +976,12 @@ def new_window_with_log(log_file_path=None, cached_data=None, window_title=None)
             ckey_match = True
             logtype_match = True
 
-            if filter_ckey_lower:
-                # Ищем подстроку, а не точное совпадение
-                ckey_match = any(filter_ckey_lower in ck.lower() for ck in ckeys)
+            if ckey_list:
+                ckey_match = any(
+                    any(search_ckey in ck.lower() for ck in ckeys)
+                    for search_ckey in ckey_list
+                )
+
             if filter_logtype_val:
                 logtype_match = (logtype_str == filter_logtype_val)
 
